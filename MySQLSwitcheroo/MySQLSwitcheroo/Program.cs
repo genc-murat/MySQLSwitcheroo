@@ -10,6 +10,12 @@ class Program
 
         var selectedTables = new List<string>();
 
+        if (!CheckDatabaseExists(sourceConnectionString, sourceConnectionInfo["Database"]))
+        {
+            AnsiConsole.MarkupLine($"[red]Kaynak veritabanı '{sourceConnectionInfo["Database"]}' bulunamadı.[/]");
+            return;
+        }
+
         try
         {
             using (var sourceConnection = new MySqlConnection(sourceConnectionString))
@@ -22,11 +28,43 @@ class Program
             var targetConnectionInfo = PromptForConnectionInfo("\nHedef DB için bağlantı bilgileri:");
             var targetConnectionString = BuildConnectionString(targetConnectionInfo);
 
-            using (var targetConnection = new MySqlConnection(targetConnectionString))
+            if (!CheckDatabaseExists(targetConnectionString, targetConnectionInfo["Database"]))
             {
-                ConnectToDatabase(targetConnection);
-                CheckAndReportTablePresence(targetConnection, selectedTables);
+                AnsiConsole.MarkupLine($"[red]Hedef veritabanı '{targetConnectionInfo["Database"]}' bulunamadı.[/]");
+                var createDb = AnsiConsole.Confirm("Hedef veritabanını oluşturmak ister misiniz?");
+                if (createDb)
+                {
+                    try
+                    {
+                        CreateDatabase(targetConnectionString, targetConnectionInfo["Database"]);
+                        AnsiConsole.MarkupLine($"[green]'{targetConnectionInfo["Database"]}' veritabanı başarıyla oluşturuldu.[/]");
+                        using (var targetConnection = new MySqlConnection(targetConnectionString))
+                        {
+                            ConnectToDatabase(targetConnection);
+                            CheckAndReportTablePresence(targetConnection, selectedTables, sourceConnectionString);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AnsiConsole.MarkupLine($"[red]Veritabanı oluşturma hatası: {ex.Message}[/]");
+                        return;
+                    }
+                }
+                else
+                {
+                    return;
+                }
             }
+            else
+            {
+                using (var targetConnection = new MySqlConnection(targetConnectionString))
+                {
+                    ConnectToDatabase(targetConnection);
+                    CheckAndReportTablePresence(targetConnection, selectedTables, sourceConnectionString);
+                }
+            }
+
+
         }
         catch (Exception ex)
         {
@@ -107,8 +145,78 @@ class Program
         }
     }
 
-    static void CheckAndReportTablePresence(MySqlConnection targetConnection, List<string> selectedTableNames)
+    static bool CheckDatabaseExists(string connectionString, string databaseName)
     {
+        try
+        {
+            using (var connection = new MySqlConnection(connectionString))
+            {
+                connection.Open();
+                using (var cmd = new MySqlCommand($"SHOW DATABASES LIKE '{databaseName}';", connection))
+                {
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        return reader.HasRows;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Veritabanı kontrolünde hata: {ex.Message}[/]");
+            return false;
+        }
+    }
+
+    static void CreateDatabase(string connectionString, string databaseName)
+    {
+        var builder = new MySqlConnectionStringBuilder(connectionString)
+        {
+            Database = ""
+        };
+
+        using (var connection = new MySqlConnection(builder.ConnectionString))
+        {
+            connection.Open();
+            using (var cmd = new MySqlCommand($"CREATE DATABASE IF NOT EXISTS `{databaseName}`;", connection))
+            {
+                cmd.ExecuteNonQuery();
+            }
+        }
+    }
+
+    static void CreateTables(MySqlConnection targetConnection, List<string> missingTables, string sourceConnectionString)
+    {
+        foreach (var tableName in missingTables)
+        {
+            // Kaynak veritabanından tablonun CREATE TABLE komutunu almak için bağlantı açılır
+            using (var sourceConnection = new MySqlConnection(sourceConnectionString))
+            {
+                sourceConnection.Open();
+                var createTableCommandText = $"SHOW CREATE TABLE {tableName};";
+                using (var cmd = new MySqlCommand(createTableCommandText, sourceConnection))
+                using (var reader = cmd.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        var createTableScript = reader.GetString(1);
+                        // Hedef veritabanında tabloyu oluştur
+                        using (var targetCmd = new MySqlCommand(createTableScript, targetConnection))
+                        {
+                            targetCmd.ExecuteNonQuery();
+                            AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosu hedef veritabanında başarıyla oluşturuldu.");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    static void CheckAndReportTablePresence(MySqlConnection targetConnection, List<string> selectedTableNames, string sourceConnectionString)
+    {
+        var missingTables = new List<string>();
+
         targetConnection.Open();
         AnsiConsole.MarkupLine("[green]Hedef bağlantı başarılı.[/]");
 
@@ -123,10 +231,21 @@ class Program
                 }
                 else
                 {
+                    missingTables.Add(tableName);
                     AnsiConsole.MarkupLine($"[red]{tableName}[/] tablosu hedef veritabanında bulunamadı.");
                 }
             }
         }
+
+        if (missingTables.Any())
+        {
+            var createTables = AnsiConsole.Confirm("Eksik tabloları hedef veritabanında oluşturmak ister misiniz?");
+            if (createTables)
+            {
+                CreateTables(targetConnection, missingTables, sourceConnectionString);
+            }
+        }
     }
+
 }
 
