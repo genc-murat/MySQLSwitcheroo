@@ -5,138 +5,128 @@ class Program
 {
     static void Main(string[] args)
     {
-        AnsiConsole.WriteLine("Kaynak DB için bağlantı bilgileri:");
-        var sourceHost = AnsiConsole.Ask<string>("Kaynak Host: ");
-        var sourceDatabase = AnsiConsole.Ask<string>("Kaynak Database: ");
-        var sourcePort = AnsiConsole.Ask<string>("Kaynak Port: ");
-        var sourceUsername = AnsiConsole.Ask<string>("Kaynak Username: ");
-        var sourcePassword = AnsiConsole.Prompt(
-            new TextPrompt<string>("Kaynak Password: ").Secret());
+        var sourceConnectionInfo = PromptForConnectionInfo("Kaynak DB için bağlantı bilgileri:");
+        var sourceConnectionString = BuildConnectionString(sourceConnectionInfo);
 
-        string sourceConnectionString = $"Server={sourceHost}; database={sourceDatabase}; port={sourcePort}; User Id={sourceUsername}; password={sourcePassword};";
-
-        List<string> selectedTableNames = [];
+        var selectedTables = new List<string>();
 
         try
         {
-            using (var connection = new MySqlConnection(sourceConnectionString))
+            using (var sourceConnection = new MySqlConnection(sourceConnectionString))
             {
-                connection.Open();
-                AnsiConsole.MarkupLine("[green]Bağlantı başarılı.[/]");
-
-                var tables = new List<string>();
-
-                // Tabloları al
-                using (var command = new MySqlCommand("SHOW TABLES;", connection))
-                using (var reader = command.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        tables.Add(reader.GetString(0));
-                    }
-                }
-
-                 selectedTableNames = AnsiConsole.Prompt(
-                    new MultiSelectionPrompt<string>()
-                        .Title("Lütfen aktarmak istediğiniz tabloları seçin:")
-                        .PageSize(10)
-                        .MoreChoicesText("[grey](Yukarı ve aşağı hareket ettirerek daha fazla tablo görebilirsiniz)[/]")
-                        .InstructionsText("[grey](Space tuşu ile seçim yapın, Enter ile onaylayın)[/]")
-                        .AddChoices(tables));
-
-                foreach (var tableName in selectedTableNames)
-                {
-                    AnsiConsole.MarkupLine($"[yellow]{tableName}[/] tablosu için kolonlar:");
-                    var columns = new List<string>();
-
-                    using (var columnCommand = new MySqlCommand($"SHOW COLUMNS FROM {tableName};", connection))
-                    using (var columnReader = columnCommand.ExecuteReader())
-                    {
-                        while (columnReader.Read())
-                        {
-                            columns.Add(columnReader.GetString(0));
-                        }
-                    }
-
-                    var selectedColumnNames = AnsiConsole.Prompt(
-                        new MultiSelectionPrompt<string>()
-                            .Title($"[green]{tableName}[/] tablosundan aktarmak istediğiniz kolonları seçin:")
-                            .PageSize(10)
-                            .MoreChoicesText("[grey](Yukarı ve aşağı hareket ettirerek daha fazla kolon görebilirsiniz)[/]")
-                            .InstructionsText("[grey](Space tuşu ile seçim yapın, Enter ile onaylayın)[/]")
-                            .AddChoices(columns));
-
-                    AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosundan seçilen kolonlar: [yellow]{string.Join(", ", selectedColumnNames)}[/]");
-                }
+                ConnectToDatabase(sourceConnection);
+                selectedTables = SelectTables(sourceConnection);
+                SelectColumnsForTables(sourceConnection, selectedTables);
             }
 
-            AnsiConsole.WriteLine("\nHedef DB için bağlantı bilgileri:");
-            var targetHost = AnsiConsole.Ask<string>("Hedef Host: ");
-            var targetDatabase = AnsiConsole.Ask<string>("Hedef Database: ");
-            var targetPort = AnsiConsole.Ask<string>("Hedef Port: ");
-            var targetUsername = AnsiConsole.Ask<string>("Hedef Username: ");
-            var targetPassword = AnsiConsole.Prompt(
-                new TextPrompt<string>("Hedef Password: ").Secret());
-
-            string targetConnectionString = $"Server={targetHost}; database={targetDatabase}; port={targetPort}; User Id={targetUsername}; password={targetPassword};";
+            var targetConnectionInfo = PromptForConnectionInfo("\nHedef DB için bağlantı bilgileri:");
+            var targetConnectionString = BuildConnectionString(targetConnectionInfo);
 
             using (var targetConnection = new MySqlConnection(targetConnectionString))
             {
-                targetConnection.Open();
-                AnsiConsole.MarkupLine("[green]Hedef bağlantı başarılı.[/]");
-
-                bool dbExists = false;
-                using (var cmd = new MySqlCommand($"SHOW DATABASES LIKE '{targetDatabase}';", targetConnection))
-                {
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        if (reader.Read())
-                        {
-                            dbExists = true;
-                        }
-                    }
-                }
-
-                if (!dbExists)
-                {
-                    AnsiConsole.MarkupLine($"[red]Hedef veritabanı '{targetDatabase}' bulunamadı.[/]");
-                    return;
-                }
-
-                targetConnection.ChangeDatabase(targetDatabase);
-
-                List<string> existingTables = new List<string>();
-                using (var cmd = new MySqlCommand("SHOW TABLES;", targetConnection))
-                {
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            existingTables.Add(reader.GetString(0));
-                        }
-                    }
-                }
-
-                foreach (var tableName in selectedTableNames)
-                {
-                    if (!existingTables.Contains(tableName))
-                    {
-                        AnsiConsole.MarkupLine($"[yellow]{tableName}[/] tablosu hedef veritabanında bulunamadı.");
-                   
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosu hedef veritabanında mevcut.");
-                       
-                    }
-                }
+                ConnectToDatabase(targetConnection);
+                CheckAndReportTablePresence(targetConnection, selectedTables);
             }
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]Bağlantı hatası: {ex.Message}[/]");
+            AnsiConsole.MarkupLine($"[red]Hata: {ex.Message}[/]");
         }
 
         Console.Read();
     }
+
+    static Dictionary<string, string> PromptForConnectionInfo(string message)
+    {
+        AnsiConsole.WriteLine(message);
+        var info = new Dictionary<string, string>
+        {
+            {"Host", AnsiConsole.Ask<string>("Host: ")},
+            {"Database", AnsiConsole.Ask<string>("Database: ")},
+            {"Port", AnsiConsole.Ask<string>("Port: ")},
+            {"Username", AnsiConsole.Ask<string>("Username: ")},
+            {"Password", AnsiConsole.Prompt(new TextPrompt<string>("Password: ").Secret())}
+        };
+
+        return info;
+    }
+
+    static string BuildConnectionString(Dictionary<string, string> connectionInfo)
+    {
+        return $"Server={connectionInfo["Host"]}; database={connectionInfo["Database"]}; port={connectionInfo["Port"]}; User Id={connectionInfo["Username"]}; password={connectionInfo["Password"]};";
+    }
+
+    static void ConnectToDatabase(MySqlConnection connection)
+    {
+        connection.Open();
+        AnsiConsole.MarkupLine("[green]Bağlantı başarılı.[/]");
+    }
+
+    static List<string> SelectTables(MySqlConnection connection)
+    {
+        var tables = new List<string>();
+        using (var command = new MySqlCommand("SHOW TABLES;", connection))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                tables.Add(reader.GetString(0));
+            }
+        }
+
+        return AnsiConsole.Prompt(
+            new MultiSelectionPrompt<string>()
+                .Title("Lütfen aktarmak istediğiniz tabloları seçin:")
+                .PageSize(10)
+                .AddChoices(tables));
+    }
+
+    static void SelectColumnsForTables(MySqlConnection connection, List<string> selectedTables)
+    {
+        foreach (var tableName in selectedTables)
+        {
+            AnsiConsole.MarkupLine($"[yellow]{tableName}[/] tablosu için kolonlar:");
+            var columns = new List<string>();
+
+            using (var columnCommand = new MySqlCommand($"SHOW COLUMNS FROM {tableName};", connection))
+            using (var columnReader = columnCommand.ExecuteReader())
+            {
+                while (columnReader.Read())
+                {
+                    columns.Add(columnReader.GetString(0));
+                }
+            }
+
+            var selectedColumnNames = AnsiConsole.Prompt(
+                new MultiSelectionPrompt<string>()
+                    .Title($"[green]{tableName}[/] tablosundan aktarmak istediğiniz kolonları seçin:")
+                    .PageSize(10)
+                    .AddChoices(columns));
+
+            AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosundan seçilen kolonlar: [yellow]{string.Join(", ", selectedColumnNames)}[/]");
+        }
+    }
+
+    static void CheckAndReportTablePresence(MySqlConnection targetConnection, List<string> selectedTableNames)
+    {
+        targetConnection.Open();
+        AnsiConsole.MarkupLine("[green]Hedef bağlantı başarılı.[/]");
+
+        foreach (var tableName in selectedTableNames)
+        {
+            using (var cmd = new MySqlCommand($"SHOW TABLES LIKE '{tableName}';", targetConnection))
+            using (var reader = cmd.ExecuteReader())
+            {
+                if (reader.HasRows)
+                {
+                    AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosu hedef veritabanında mevcut.");
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine($"[red]{tableName}[/] tablosu hedef veritabanında bulunamadı.");
+                }
+            }
+        }
+    }
 }
+
