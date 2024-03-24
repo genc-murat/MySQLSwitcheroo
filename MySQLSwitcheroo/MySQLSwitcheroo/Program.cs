@@ -3,35 +3,35 @@ using Spectre.Console;
 
 class Program
 {
-    static void Main(string[] args)
+    static async void Main(string[] args)
     {
 
         AnsiConsole.Write(new FigletText("MySQL Switcheroo").Color(Color.Yellow));
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("Bu araç, bir veritabanındaki tabloları ve verileri başka bir veritabanına aktarmanızı sağlar.");
+        AnsiConsole.MarkupLine("This tool allows you to transfer tables and data from one database to another.");
 
         var table = new Table();
-        table.AddColumn("Özellik");
-        table.AddColumn("Açıklama");
+        table.AddColumn("Feature");
+        table.AddColumn("Description");
 
-        table.AddRow("Kaynak Veritabanı Bağlantısı", "Kaynak veritabanı için bağlantı bilgilerini toplar.");
-        table.AddRow("Hedef Veritabanı Bağlantısı", "Hedef veritabanı için bağlantı bilgilerini toplar.");
-        table.AddRow("Tablo Seçimi", "Aktarılacak tabloların seçimini yapar.");
-        table.AddRow("Kolon Seçimi", "Seçilen tablolar için aktarılacak kolonları seçer.");
-        table.AddRow("Veritabanı ve Tablo Kontrolü", "Kaynak ve hedef veritabanlarında gerekli kontrolleri yapar.");
-        table.AddRow("Veri Aktarımı", "Seçilen tablo ve kolonlardaki verileri hedef veritabanına aktarır.");
+        table.AddRow("Source Database Connection", "Collects connection information for the source database.");
+        table.AddRow("Destination Database Connection", "Collects connection information for the destination database.");
+        table.AddRow("Table Selection", "Allows selection of tables to be transferred.");
+        table.AddRow("Column Selection", "Selects columns to be transferred for the chosen tables.");
+        table.AddRow("Database and Table Validation", "Performs necessary validations on source and destination databases.");
+        table.AddRow("Data Transfer", "Transfers data from selected tables and columns to the destination database.");
 
         AnsiConsole.Write(table);
 
 
-        var sourceConnectionInfo = PromptForConnectionInfo("Kaynak DB için bağlantı bilgileri:");
+        var sourceConnectionInfo = PromptForConnectionInfo("Connection information for Source DB:");
         var sourceConnectionString = BuildConnectionString(sourceConnectionInfo);
 
         var selectedTables = new List<string>();
 
-        if (!CheckDatabaseExists(sourceConnectionString, sourceConnectionInfo["Database"]))
+        if (!(await CheckDatabaseExistsAsync(sourceConnectionString, sourceConnectionInfo["Database"])))
         {
-            AnsiConsole.MarkupLine($"[red]Kaynak veritabanı '{sourceConnectionInfo["Database"]}' bulunamadı.[/]");
+            AnsiConsole.MarkupLine($"[red]Source database '{sourceConnectionInfo["Database"]}' not found.[/]");
             return;
         }
 
@@ -41,31 +41,34 @@ class Program
             {
                 ConnectToDatabase(sourceConnection);
                 selectedTables = SelectTables(sourceConnection);
-                SelectColumnsForTables(sourceConnection, selectedTables);
+                await SelectColumnsForTablesAsync(sourceConnection, selectedTables);
             }
 
-            var targetConnectionInfo = PromptForConnectionInfo("\nHedef DB için bağlantı bilgileri:");
+            var targetConnectionInfo = PromptForConnectionInfo("\nConnection information for Destination DB:");
             var targetConnectionString = BuildConnectionString(targetConnectionInfo);
 
-            if (!CheckDatabaseExists(targetConnectionString, targetConnectionInfo["Database"]))
+            if (!(await CheckDatabaseExistsAsync(targetConnectionString, targetConnectionInfo["Database"])))
             {
-                AnsiConsole.MarkupLine($"[red]Hedef veritabanı '{targetConnectionInfo["Database"]}' bulunamadı.[/]");
-                var createDb = AnsiConsole.Confirm("Hedef veritabanını oluşturmak ister misiniz?");
+                AnsiConsole.MarkupLine($"[red]Destination database '{targetConnectionInfo["Database"]}' not found.[/]");
+                var createDb = AnsiConsole.Confirm("Would you like to create the destination database?");
+
                 if (createDb)
                 {
                     try
                     {
-                        CreateDatabase(targetConnectionString, targetConnectionInfo["Database"]);
-                        AnsiConsole.MarkupLine($"[green]'{targetConnectionInfo["Database"]}' veritabanı başarıyla oluşturuldu.[/]");
+                        await CreateDatabaseAsync(targetConnectionString, targetConnectionInfo["Database"]);
+                        AnsiConsole.MarkupLine($"[green]'{targetConnectionInfo["Database"]}' database successfully created.[/]");
+
                         using (var targetConnection = new MySqlConnection(targetConnectionString))
                         {
                             ConnectToDatabase(targetConnection);
-                            CheckAndReportTablePresence(targetConnection, selectedTables, sourceConnectionString);
+                            await CheckAndReportTablePresenceAsync(targetConnection, selectedTables, sourceConnectionString);
                         }
                     }
                     catch (Exception ex)
                     {
-                        AnsiConsole.MarkupLine($"[red]Veritabanı oluşturma hatası: {ex.Message}[/]");
+                        AnsiConsole.MarkupLine($"[red]Database creation error: {ex.Message}[/]");
+
                         return;
                     }
                 }
@@ -79,7 +82,7 @@ class Program
                 using (var targetConnection = new MySqlConnection(targetConnectionString))
                 {
                     ConnectToDatabase(targetConnection);
-                    CheckAndReportTablePresence(targetConnection, selectedTables, sourceConnectionString);
+                    await CheckAndReportTablePresenceAsync(targetConnection, selectedTables, sourceConnectionString);
                 }
             }
 
@@ -116,7 +119,7 @@ class Program
     static void ConnectToDatabase(MySqlConnection connection)
     {
         connection.Open();
-        AnsiConsole.MarkupLine("[green]Bağlantı başarılı.[/]");
+        AnsiConsole.MarkupLine("[green]Connection successful.[/]");
     }
 
     static List<string> SelectTables(MySqlConnection connection)
@@ -132,24 +135,24 @@ class Program
         }
 
         return AnsiConsole.Prompt(
-            new MultiSelectionPrompt<string>()
-                .Title("Lütfen aktarmak istediğiniz tabloları seçin:")
-                .Required()
-                .PageSize(15)
-                .AddChoices(tables));
+             new MultiSelectionPrompt<string>()
+                 .Title("Please select the tables you want to transfer:")
+                 .Required()
+                 .PageSize(15)
+                 .AddChoices(tables));
     }
 
-    static void SelectColumnsForTables(MySqlConnection connection, List<string> selectedTables)
+    static async Task SelectColumnsForTablesAsync(MySqlConnection connection, List<string> selectedTables)
     {
         foreach (var tableName in selectedTables)
         {
-            AnsiConsole.MarkupLine($"[yellow]{tableName}[/] tablosu için kolonlar:");
+            AnsiConsole.MarkupLine($"[yellow]{tableName}[/] table columns:");
             var columns = new List<string>();
 
-            using (var columnCommand = new MySqlCommand($"SHOW COLUMNS FROM {tableName};", connection))
-            using (var columnReader = columnCommand.ExecuteReader())
+            await using (var columnCommand = new MySqlCommand($"SHOW COLUMNS FROM `{tableName}`;", connection))
+            await using (var columnReader = await columnCommand.ExecuteReaderAsync())
             {
-                while (columnReader.Read())
+                while (await columnReader.ReadAsync())
                 {
                     columns.Add(columnReader.GetString(0));
                 }
@@ -157,111 +160,117 @@ class Program
 
             var selectedColumnNames = AnsiConsole.Prompt(
                 new MultiSelectionPrompt<string>()
-                    .Title($"[green]{tableName}[/] tablosundan aktarmak istediğiniz kolonları seçin:")
+                    .Title($"[green]{tableName}[/] table - select the columns you wish to transfer:")
                     .PageSize(15)
                     .Required()
                     .AddChoices(columns));
 
-            AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosundan seçilen kolonlar: [yellow]{string.Join(", ", selectedColumnNames)}[/]");
+            AnsiConsole.MarkupLine($"[green]{tableName}[/] selected columns: [yellow]{string.Join(", ", selectedColumnNames)}[/]");
         }
     }
 
-    static bool CheckDatabaseExists(string connectionString, string databaseName)
+    static async ValueTask<bool> CheckDatabaseExistsAsync(string connectionString, string databaseName)
     {
         try
         {
-            using (var connection = new MySqlConnection(connectionString))
+            await using (var connection = new MySqlConnection(connectionString))
             {
-                connection.Open();
-                using (var cmd = new MySqlCommand($"SHOW DATABASES LIKE '{databaseName}';", connection))
+                await connection.OpenAsync();
+                await using (var cmd = new MySqlCommand($"SHOW DATABASES LIKE '{databaseName}';", connection))
                 {
-                    using (var reader = cmd.ExecuteReader())
+                    await using (var reader = await cmd.ExecuteReaderAsync())
                     {
-                        return reader.HasRows;
+                        return await reader.ReadAsync();
                     }
                 }
             }
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]Veritabanı kontrolünde hata: {ex.Message}[/]");
+            AnsiConsole.MarkupLine($"[red]Error checking database: {ex.Message}[/]");
             return false;
         }
     }
 
-    static void CreateDatabase(string connectionString, string databaseName)
+    static async Task CreateDatabaseAsync(string connectionString, string databaseName)
     {
-        var builder = new MySqlConnectionStringBuilder(connectionString)
-        {
-            Database = ""
-        };
+        var builder = new MySqlConnectionStringBuilder(connectionString) { Database = "" };
 
-        using (var connection = new MySqlConnection(builder.ConnectionString))
+        await using (var connection = new MySqlConnection(builder.ConnectionString))
         {
-            connection.Open();
-            using (var cmd = new MySqlCommand($"CREATE DATABASE IF NOT EXISTS `{databaseName}`;", connection))
+            await connection.OpenAsync();
+
+            var query = $"CREATE DATABASE IF NOT EXISTS `{databaseName}`;";
+            await using (var cmd = new MySqlCommand(query, connection))
             {
-                cmd.ExecuteNonQuery();
+                await cmd.ExecuteNonQueryAsync();
             }
         }
     }
 
-    static void CreateTables(MySqlConnection targetConnection, List<string> missingTables, string sourceConnectionString)
+    static async Task CreateTablesAsync(MySqlConnection targetConnection, List<string> missingTables, string sourceConnectionString)
     {
         foreach (var tableName in missingTables)
         {
-            using (var sourceConnection = new MySqlConnection(sourceConnectionString))
+            try
             {
-                sourceConnection.Open();
-                var createTableCommandText = $"SHOW CREATE TABLE {tableName};";
-                using (var cmd = new MySqlCommand(createTableCommandText, sourceConnection))
-                using (var reader = cmd.ExecuteReader())
+                await using (var sourceConnection = new MySqlConnection(sourceConnectionString))
                 {
-                    if (reader.Read())
+                    await sourceConnection.OpenAsync();
+                    var createTableCommandText = $"SHOW CREATE TABLE `{tableName}`;";
+                    await using (var cmd = new MySqlCommand(createTableCommandText, sourceConnection))
+                    await using (var reader = await cmd.ExecuteReaderAsync())
                     {
-                        var createTableScript = reader.GetString(1);
-                        using (var targetCmd = new MySqlCommand(createTableScript, targetConnection))
+                        if (await reader.ReadAsync())
                         {
-                            targetCmd.ExecuteNonQuery();
-                            AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosu hedef veritabanında başarıyla oluşturuldu.");
+                            var createTableScript = reader.GetString(1);
+                            await using (var targetCmd = new MySqlCommand(createTableScript, targetConnection))
+                            {
+                                await targetCmd.ExecuteNonQueryAsync();
+                                AnsiConsole.MarkupLine($"[green]{tableName}[/] table successfully created in the target database.");
+                            }
                         }
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]Failed to create {tableName} table in the target database: {ex.Message}[/]");
+            }
         }
     }
 
 
-    static void CheckAndReportTablePresence(MySqlConnection targetConnection, List<string> selectedTableNames, string sourceConnectionString)
+    static async Task CheckAndReportTablePresenceAsync(MySqlConnection targetConnection, List<string> selectedTableNames, string sourceConnectionString)
     {
         var missingTables = new List<string>();
 
-        targetConnection.Open();
-        AnsiConsole.MarkupLine("[green]Hedef bağlantı başarılı.[/]");
+        await targetConnection.OpenAsync();
+        AnsiConsole.MarkupLine("[green]Target connection successful.[/]");
 
         foreach (var tableName in selectedTableNames)
         {
-            using (var cmd = new MySqlCommand($"SHOW TABLES LIKE '{tableName}';", targetConnection))
-            using (var reader = cmd.ExecuteReader())
+            await using (var cmd = new MySqlCommand($"SHOW TABLES LIKE '{tableName}';", targetConnection))
+            await using (var reader = await cmd.ExecuteReaderAsync())
             {
-                if (reader.HasRows)
+                if (await reader.ReadAsync())
                 {
-                    AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosu hedef veritabanında mevcut.");
+                    AnsiConsole.MarkupLine($"[green]{tableName}[/] table exists in the target database.");
                 }
                 else
                 {
                     missingTables.Add(tableName);
-                    AnsiConsole.MarkupLine($"[red]{tableName}[/] tablosu hedef veritabanında bulunamadı.");
+                    AnsiConsole.MarkupLine($"[red]{tableName}[/] table does not exist in the target database.");
                 }
             }
         }
 
         if (missingTables.Any())
         {
-            var createTables = AnsiConsole.Confirm("Eksik tabloları hedef veritabanında oluşturmak ister misiniz?");
+            var createTables = AnsiConsole.Confirm("Would you like to create the missing tables in the target database?");
             if (createTables)
             {
-                CreateTables(targetConnection, missingTables, sourceConnectionString);
+                await CreateTablesAsync(targetConnection, missingTables, sourceConnectionString);
             }
         }
     }
