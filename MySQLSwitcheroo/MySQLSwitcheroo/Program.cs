@@ -100,7 +100,7 @@ class Program
         {
             {"Host", AnsiConsole.Ask<string>("Host: ")},
             {"Database", AnsiConsole.Ask<string>("Database: ")},
-            {"Port", AnsiConsole.Ask<string>("Port: ")},
+            {"Port", AnsiConsole.Ask<string>("Port: ","3306")},
             {"Username", AnsiConsole.Ask<string>("Username: ")},
             {"Password", AnsiConsole.Prompt(new TextPrompt<string>("Password: ").Secret())}
         };
@@ -134,6 +134,7 @@ class Program
         return AnsiConsole.Prompt(
             new MultiSelectionPrompt<string>()
                 .Title("Lütfen aktarmak istediğiniz tabloları seçin:")
+                .Required()
                 .PageSize(15)
                 .AddChoices(tables));
     }
@@ -158,6 +159,7 @@ class Program
                 new MultiSelectionPrompt<string>()
                     .Title($"[green]{tableName}[/] tablosundan aktarmak istediğiniz kolonları seçin:")
                     .PageSize(15)
+                    .Required()
                     .AddChoices(columns));
 
             AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosundan seçilen kolonlar: [yellow]{string.Join(", ", selectedColumnNames)}[/]");
@@ -208,7 +210,6 @@ class Program
     {
         foreach (var tableName in missingTables)
         {
-            // Kaynak veritabanından tablonun CREATE TABLE komutunu almak için bağlantı açılır
             using (var sourceConnection = new MySqlConnection(sourceConnectionString))
             {
                 sourceConnection.Open();
@@ -219,7 +220,6 @@ class Program
                     if (reader.Read())
                     {
                         var createTableScript = reader.GetString(1);
-                        // Hedef veritabanında tabloyu oluştur
                         using (var targetCmd = new MySqlCommand(createTableScript, targetConnection))
                         {
                             targetCmd.ExecuteNonQuery();
@@ -266,5 +266,48 @@ class Program
         }
     }
 
+    static async Task TransferDataAsync(string sourceConnectionString, string targetConnectionString, List<string> selectedTables, Dictionary<string, List<string>> selectedColumns)
+    {
+        await using var sourceConnection = new MySqlConnection(sourceConnectionString);
+        await sourceConnection.OpenAsync();
+
+        await using var targetConnection = new MySqlConnection(targetConnectionString);
+        await targetConnection.OpenAsync();
+
+        foreach (var tableName in selectedTables)
+        {
+            var columnList = string.Join(", ", selectedColumns[tableName]);
+            var query = $"SELECT {columnList} FROM {tableName};";
+
+            await using var command = new MySqlCommand(query, sourceConnection);
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var insertQuery = PrepareInsertQuery(tableName, selectedColumns[tableName]);
+            await using var insertCommand = new MySqlCommand(insertQuery, targetConnection);
+
+            await using var transaction = await targetConnection.BeginTransactionAsync();
+            insertCommand.Transaction = transaction;
+
+            while (await reader.ReadAsync())
+            {
+                for (int i = 0; i < selectedColumns[tableName].Count; i++)
+                {
+                    insertCommand.Parameters.AddWithValue($"@{selectedColumns[tableName][i]}", reader.GetValue(i));
+                }
+
+                await insertCommand.ExecuteNonQueryAsync();
+                insertCommand.Parameters.Clear();
+            }
+
+            await transaction.CommitAsync();
+        }
+    }
+
+    private static string PrepareInsertQuery(string tableName, List<string> columns)
+    {
+        var columnList = string.Join(", ", columns);
+        var valuesList = "@" + string.Join(", @", columns);
+        return $"INSERT INTO {tableName} ({columnList}) VALUES ({valuesList});";
+    }
 }
 
