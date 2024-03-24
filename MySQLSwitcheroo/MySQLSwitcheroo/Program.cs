@@ -5,6 +5,25 @@ class Program
 {
     static void Main(string[] args)
     {
+
+        AnsiConsole.Write(new FigletText("MySQL Switcheroo").Color(Color.Yellow));
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("Bu araç, bir veritabanındaki tabloları ve verileri başka bir veritabanına aktarmanızı sağlar.");
+
+        var table = new Table();
+        table.AddColumn("Özellik");
+        table.AddColumn("Açıklama");
+
+        table.AddRow("Kaynak Veritabanı Bağlantısı", "Kaynak veritabanı için bağlantı bilgilerini toplar.");
+        table.AddRow("Hedef Veritabanı Bağlantısı", "Hedef veritabanı için bağlantı bilgilerini toplar.");
+        table.AddRow("Tablo Seçimi", "Aktarılacak tabloların seçimini yapar.");
+        table.AddRow("Kolon Seçimi", "Seçilen tablolar için aktarılacak kolonları seçer.");
+        table.AddRow("Veritabanı ve Tablo Kontrolü", "Kaynak ve hedef veritabanlarında gerekli kontrolleri yapar.");
+        table.AddRow("Veri Aktarımı", "Seçilen tablo ve kolonlardaki verileri hedef veritabanına aktarır.");
+
+        AnsiConsole.Write(table);
+
+
         var sourceConnectionInfo = PromptForConnectionInfo("Kaynak DB için bağlantı bilgileri:");
         var sourceConnectionString = BuildConnectionString(sourceConnectionInfo);
 
@@ -115,7 +134,7 @@ class Program
         return AnsiConsole.Prompt(
             new MultiSelectionPrompt<string>()
                 .Title("Lütfen aktarmak istediğiniz tabloları seçin:")
-                .PageSize(10)
+                .PageSize(15)
                 .AddChoices(tables));
     }
 
@@ -138,7 +157,7 @@ class Program
             var selectedColumnNames = AnsiConsole.Prompt(
                 new MultiSelectionPrompt<string>()
                     .Title($"[green]{tableName}[/] tablosundan aktarmak istediğiniz kolonları seçin:")
-                    .PageSize(10)
+                    .PageSize(15)
                     .AddChoices(columns));
 
             AnsiConsole.MarkupLine($"[green]{tableName}[/] tablosundan seçilen kolonlar: [yellow]{string.Join(", ", selectedColumnNames)}[/]");
