@@ -3,7 +3,7 @@ using Spectre.Console;
 
 class Program
 {
-    static async void Main(string[] args)
+    static async Task Main(string[] args)
     {
 
         AnsiConsole.Write(new FigletText("MySQL Switcheroo").Color(Color.Yellow));
