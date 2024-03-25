@@ -41,7 +41,8 @@ class Program
         {
             using (var sourceConnection = new MySqlConnection(sourceConnectionString))
             {
-                ConnectToDatabase(sourceConnection);
+                sourceConnection.Open();
+                AnsiConsole.MarkupLine("[green]Connection successful.[/]");
                 selectedTables = SelectTables(sourceConnection);
                 selectedColumns= await SelectColumnsForTablesAsync(sourceConnection, selectedTables);
             }
@@ -63,7 +64,7 @@ class Program
 
                         using (var targetConnection = new MySqlConnection(targetConnectionString))
                         {
-                            ConnectToDatabase(targetConnection);
+                            AnsiConsole.MarkupLine("[green]Connection successful.[/]");
                             await CheckAndReportTablePresenceAsync(targetConnection, selectedTables, sourceConnectionString);
                         }
                     }
@@ -83,7 +84,7 @@ class Program
             {
                 using (var targetConnection = new MySqlConnection(targetConnectionString))
                 {
-                    ConnectToDatabase(targetConnection);
+                    AnsiConsole.MarkupLine("[green]Connection successful.[/]");
                     await CheckAndReportTablePresenceAsync(targetConnection, selectedTables, sourceConnectionString);
                 }
             }
@@ -93,7 +94,7 @@ class Program
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]Hata: {ex.Message}[/]");
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
         }
 
         Console.Read();
@@ -117,12 +118,6 @@ class Program
     static string BuildConnectionString(Dictionary<string, string> connectionInfo)
     {
         return $"Server={connectionInfo["Host"]}; database={connectionInfo["Database"]}; port={connectionInfo["Port"]}; User Id={connectionInfo["Username"]}; password={connectionInfo["Password"]};";
-    }
-
-    static void ConnectToDatabase(MySqlConnection connection)
-    {
-        connection.Open();
-        AnsiConsole.MarkupLine("[green]Connection successful.[/]");
     }
 
     static List<string> SelectTables(MySqlConnection connection)
