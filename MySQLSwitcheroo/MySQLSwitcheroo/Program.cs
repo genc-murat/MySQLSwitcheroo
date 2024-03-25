@@ -29,6 +29,8 @@ class Program
 
         var selectedTables = new List<string>();
 
+        Dictionary<string, List<string>> selectedColumns = new();
+
         if (!(await CheckDatabaseExistsAsync(sourceConnectionString, sourceConnectionInfo["Database"])))
         {
             AnsiConsole.MarkupLine($"[red]Source database '{sourceConnectionInfo["Database"]}' not found.[/]");
@@ -41,7 +43,7 @@ class Program
             {
                 ConnectToDatabase(sourceConnection);
                 selectedTables = SelectTables(sourceConnection);
-                await SelectColumnsForTablesAsync(sourceConnection, selectedTables);
+                selectedColumns= await SelectColumnsForTablesAsync(sourceConnection, selectedTables);
             }
 
             var targetConnectionInfo = PromptForConnectionInfo("\nConnection information for Destination DB:");
@@ -86,6 +88,7 @@ class Program
                 }
             }
 
+            await TransferDataAsync(sourceConnectionString, targetConnectionString, selectedTables, selectedColumns);
 
         }
         catch (Exception ex)
@@ -142,19 +145,32 @@ class Program
                  .AddChoices(tables));
     }
 
-    static async Task SelectColumnsForTablesAsync(MySqlConnection connection, List<string> selectedTables)
+    static async Task<Dictionary<string, List<string>>> SelectColumnsForTablesAsync(MySqlConnection connection, List<string> selectedTables)
     {
+        var selectedColumns = new Dictionary<string, List<string>>();
+
         foreach (var tableName in selectedTables)
         {
             AnsiConsole.MarkupLine($"[yellow]{tableName}[/] table columns:");
             var columns = new List<string>();
+            string primaryKey = "";
 
             await using (var columnCommand = new MySqlCommand($"SHOW COLUMNS FROM `{tableName}`;", connection))
             await using (var columnReader = await columnCommand.ExecuteReaderAsync())
             {
                 while (await columnReader.ReadAsync())
                 {
-                    columns.Add(columnReader.GetString(0));
+                    string columnName = columnReader.GetString(0);
+                    string columnKey = columnReader.GetString(3); 
+
+                    if (columnKey == "PRI")
+                    {
+                        primaryKey = columnName; 
+                    }
+                    else
+                    {
+                        columns.Add(columnName); 
+                    }
                 }
             }
 
@@ -162,11 +178,19 @@ class Program
                 new MultiSelectionPrompt<string>()
                     .Title($"[green]{tableName}[/] table - select the columns you wish to transfer:")
                     .PageSize(15)
-                    .Required()
                     .AddChoices(columns));
 
+            if (selectedColumnNames.Count == 0)
+            {
+                selectedColumnNames = columns;
+            }
+
             AnsiConsole.MarkupLine($"[green]{tableName}[/] selected columns: [yellow]{string.Join(", ", selectedColumnNames)}[/]");
+
+            selectedColumns[tableName] = selectedColumnNames;
         }
+
+        return selectedColumns;
     }
 
     static async ValueTask<bool> CheckDatabaseExistsAsync(string connectionString, string databaseName)
@@ -277,38 +301,47 @@ class Program
 
     static async Task TransferDataAsync(string sourceConnectionString, string targetConnectionString, List<string> selectedTables, Dictionary<string, List<string>> selectedColumns)
     {
-        await using var sourceConnection = new MySqlConnection(sourceConnectionString);
-        await sourceConnection.OpenAsync();
-
-        await using var targetConnection = new MySqlConnection(targetConnectionString);
-        await targetConnection.OpenAsync();
-
-        foreach (var tableName in selectedTables)
+        try
         {
-            var columnList = string.Join(", ", selectedColumns[tableName]);
-            var query = $"SELECT {columnList} FROM {tableName};";
-
-            await using var command = new MySqlCommand(query, sourceConnection);
-            await using var reader = await command.ExecuteReaderAsync();
-
-            var insertQuery = PrepareInsertQuery(tableName, selectedColumns[tableName]);
-            await using var insertCommand = new MySqlCommand(insertQuery, targetConnection);
-
-            await using var transaction = await targetConnection.BeginTransactionAsync();
-            insertCommand.Transaction = transaction;
-
-            while (await reader.ReadAsync())
+            using (var sourceConnection = new MySqlConnection(sourceConnectionString))
+            using (var targetConnection = new MySqlConnection(targetConnectionString))
             {
-                for (int i = 0; i < selectedColumns[tableName].Count; i++)
+                await sourceConnection.OpenAsync();
+                await targetConnection.OpenAsync();
+
+                foreach (var tableName in selectedTables)
                 {
-                    insertCommand.Parameters.AddWithValue($"@{selectedColumns[tableName][i]}", reader.GetValue(i));
+                    var columnList = string.Join(", ", selectedColumns[tableName]);
+                    var query = $"SELECT {columnList} FROM `{tableName}`;";
+
+                    using (var command = new MySqlCommand(query, sourceConnection))
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        var insertQuery = PrepareInsertQuery(tableName, selectedColumns[tableName]);
+
+                        while (await reader.ReadAsync())
+                        {
+                            using (var transaction = await targetConnection.BeginTransactionAsync())
+                            using (var insertCommand = new MySqlCommand(insertQuery, targetConnection, transaction))
+                            {
+                                for (int i = 0; i < reader.FieldCount; i++)
+                                {
+                                    insertCommand.Parameters.AddWithValue($"@{selectedColumns[tableName][i]}", reader.GetValue(i));
+                                }
+
+                                await insertCommand.ExecuteNonQueryAsync();
+                                await transaction.CommitAsync();
+                            }
+                        }
+                    }
                 }
 
-                await insertCommand.ExecuteNonQueryAsync();
-                insertCommand.Parameters.Clear();
+                AnsiConsole.MarkupLine($"[green]Data transfer completed successfully.[/] ");
             }
-
-            await transaction.CommitAsync();
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]An error occurred during the data transfer: {ex.Message}[/]");
         }
     }
 
@@ -316,7 +349,7 @@ class Program
     {
         var columnList = string.Join(", ", columns);
         var valuesList = "@" + string.Join(", @", columns);
-        return $"INSERT INTO {tableName} ({columnList}) VALUES ({valuesList});";
+        return $"INSERT INTO `{tableName}` ({columnList}) VALUES ({valuesList});";
     }
 }
 
